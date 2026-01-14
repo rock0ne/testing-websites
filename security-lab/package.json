@@ -1,0 +1,23 @@
+{
+  "name": "security-lab",
+  "version": "1.0.0",
+  "description": "Educational web security lab - Learn attack and defense techniques",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "vulnerable": "SECURE_MODE=false node server.js",
+    "secure": "SECURE_MODE=true node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^9.2.2",
+    "cookie-parser": "^1.4.6",
+    "express-validator": "^7.0.1",
+    "winston": "^3.11.0",
+    "uuid": "^9.0.1"
+  }
+}
