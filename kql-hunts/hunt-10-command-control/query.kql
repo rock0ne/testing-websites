@@ -1,0 +1,197 @@
+// ============================================================================
+// Hunt 10: Command & Control Detection
+// MITRE ATT&CK: T1071, T1573, T1571, T1090
+// ============================================================================
+
+let lookback = 24h;
+
+// Known C2 frameworks and tools
+let c2_indicators = dynamic([
+    "Cobalt Strike", "Metasploit", "Empire", "Covenant",
+    "Sliver", "Havoc", "Brute Ratel", "PoshC2"
+]);
+
+// Suspicious user agents
+let suspicious_ua = dynamic([
+    "Mozilla/4.0", "Mozilla/5.0 (compatible;",
+    "Java/", "Python-urllib", "Go-http-client",
+    "curl/", "wget/", "PowerShell/"
+]);
+
+// ============================================================================
+// DETECTION 1: Beaconing Detection (Regular Intervals)
+// ============================================================================
+let beaconing = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "ConnectionSuccess"
+| where RemoteIPType == "Public"
+| summarize 
+    ConnectionTimes = make_list(Timestamp, 100),
+    ConnectionCount = count(),
+    TotalBytes = sum(SentBytes + ReceivedBytes)
+    by DeviceName, RemoteIP, RemotePort, InitiatingProcessFileName
+| where ConnectionCount >= 10
+| extend 
+    // Calculate time intervals between connections
+    Intervals = array_sort_asc(ConnectionTimes)
+| mv-apply Intervals on (
+    extend PrevTime = prev(Intervals)
+    | where isnotnull(PrevTime)
+    | extend IntervalSeconds = datetime_diff('second', Intervals, PrevTime)
+    | summarize 
+        AvgInterval = avg(IntervalSeconds),
+        StdDevInterval = stdev(IntervalSeconds),
+        MinInterval = min(IntervalSeconds),
+        MaxInterval = max(IntervalSeconds)
+)
+| where StdDevInterval < AvgInterval * 0.3 // Low variance = regular beaconing
+| where AvgInterval between (30 .. 3600) // 30 sec to 1 hour intervals
+| extend 
+    DetectionType = "Potential C2 Beaconing",
+    Severity = "Critical",
+    MitreAttack = "T1071",
+    RiskScore = 90,
+    BeaconInterval = strcat(tostring(toint(AvgInterval)), " seconds")
+| project 
+    Timestamp = now(), DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    RemoteIP, RemotePort, ProcessName = InitiatingProcessFileName,
+    ConnectionCount, BeaconInterval, AvgInterval, StdDevInterval;
+
+// ============================================================================
+// DETECTION 2: DNS-based C2
+// ============================================================================
+let dns_c2 = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where RemotePort == 53
+| extend 
+    QueryLength = strlen(RemoteUrl),
+    EntropyIndicator = array_length(split(RemoteUrl, "."))
+| where QueryLength > 40 or EntropyIndicator > 4
+| summarize 
+    QueryCount = count(),
+    UniqueQueries = dcount(RemoteUrl),
+    AvgQueryLength = avg(QueryLength),
+    SampleQueries = make_set(RemoteUrl, 5)
+    by DeviceName, InitiatingProcessFileName, bin(Timestamp, 1h)
+| where QueryCount > 50 and UniqueQueries > 20
+| extend 
+    DetectionType = "DNS-based C2 Communication",
+    Severity = "High",
+    MitreAttack = "T1071.004",
+    RiskScore = 85
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = InitiatingProcessFileName, QueryCount, UniqueQueries, AvgQueryLength;
+
+// ============================================================================
+// DETECTION 3: Encrypted C2 on Non-Standard Ports
+// ============================================================================
+let encrypted_nonstandard = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "ConnectionSuccess"
+| where RemoteIPType == "Public"
+| where RemotePort !in (80, 443, 8080, 8443)
+| where RemotePort > 1024
+| summarize 
+    ConnectionCount = count(),
+    TotalBytes = sum(SentBytes + ReceivedBytes),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, RemoteIP, RemotePort, InitiatingProcessFileName
+| where ConnectionCount >= 5 and TotalBytes > 10000
+| extend 
+    DetectionType = "Encrypted Traffic on Non-Standard Port",
+    Severity = "Medium",
+    MitreAttack = "T1571",
+    RiskScore = 70
+| project 
+    Timestamp = LastSeen, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    RemoteIP, RemotePort, ProcessName = InitiatingProcessFileName,
+    ConnectionCount, TotalBytes;
+
+// ============================================================================
+// DETECTION 4: Known C2 Framework Indicators
+// ============================================================================
+let known_c2 = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where RemoteUrl has_any (c2_indicators)
+    or AdditionalFields has_any (c2_indicators)
+| extend 
+    DetectionType = "Known C2 Framework Indicator",
+    Severity = "Critical",
+    MitreAttack = "T1071",
+    RiskScore = 95
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    RemoteIP, RemoteUrl, InitiatingProcessFileName;
+
+// ============================================================================
+// DETECTION 5: Suspicious HTTP/S Patterns
+// ============================================================================
+let suspicious_http = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where RemotePort in (80, 443)
+| where RemoteIPType == "Public"
+| extend 
+    UserAgent = tostring(parse_json(AdditionalFields).UserAgent)
+| where UserAgent has_any (suspicious_ua)
+    or UserAgent == ""
+    or strlen(UserAgent) < 10
+| summarize 
+    ConnectionCount = count(),
+    UniqueDestinations = dcount(RemoteIP)
+    by DeviceName, InitiatingProcessFileName, UserAgent
+| where ConnectionCount >= 5
+| extend 
+    DetectionType = "Suspicious HTTP User-Agent",
+    Severity = "Medium",
+    MitreAttack = "T1071.001",
+    RiskScore = 65
+| project 
+    Timestamp = now(), DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = InitiatingProcessFileName, UserAgent, ConnectionCount;
+
+// ============================================================================
+// DETECTION 6: Long-Running Connections
+// ============================================================================
+let long_connections = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "ConnectionSuccess"
+| where RemoteIPType == "Public"
+| extend 
+    ConnectionDuration = datetime_diff('minute', Timestamp, Timestamp) // Placeholder
+| summarize 
+    TotalConnections = count(),
+    TotalBytes = sum(SentBytes + ReceivedBytes),
+    AvgBytesPerConnection = avg(SentBytes + ReceivedBytes)
+    by DeviceName, RemoteIP, InitiatingProcessFileName
+| where TotalConnections >= 100 and TotalBytes > 1000000
+| extend 
+    DetectionType = "Persistent C2 Connection",
+    Severity = "High",
+    MitreAttack = "T1071",
+    RiskScore = 80
+| project 
+    Timestamp = now(), DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    RemoteIP, ProcessName = InitiatingProcessFileName, TotalConnections, TotalBytes;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union beaconing, dns_c2, encrypted_nonstandard, known_c2, suspicious_http, long_connections
+| summarize 
+    TotalEvents = count(),
+    C2Types = make_set(DetectionType),
+    MaxRiskScore = max(RiskScore),
+    C2Destinations = make_set(RemoteIP, 10),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, MitreAttack
+| extend 
+    AlertTitle = strcat("Command & Control Activity Detected on ", DeviceName),
+    OverallSeverity = case(
+        MaxRiskScore >= 90, "Critical",
+        MaxRiskScore >= 75, "High",
+        "Medium"
+    )
+| order by MaxRiskScore desc

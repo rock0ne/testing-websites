@@ -1,0 +1,205 @@
+// ============================================================================
+// Hunt 01: Credential Dumping - LSASS Access Detection
+// MITRE ATT&CK: T1003.001 - OS Credential Dumping: LSASS Memory
+// ============================================================================
+// Author: BlueBastion Labs
+// Version: 1.0
+// Last Updated: 2024-01-14
+// ============================================================================
+
+// Parameters (adjust for your environment)
+let lookback = 24h;
+let lsass_process = "lsass.exe";
+
+// Known credential dumping tools and suspicious processes
+let suspicious_processes = dynamic([
+    "mimikatz.exe", "mimi.exe", "mimi64.exe",
+    "procdump.exe", "procdump64.exe",
+    "sqldumper.exe",
+    "nanodump.exe",
+    "pypykatz.exe",
+    "dumpert.exe",
+    "handlekatz.exe",
+    "physmem2profit.exe"
+]);
+
+// Suspicious command line patterns
+let suspicious_cmdline_patterns = dynamic([
+    "sekurlsa", "logonpasswords", "lsadump",
+    "minidump", "MiniDump", "comsvcs",
+    "procdump.*lsass", "sqldumper.*lsass",
+    "-ma lsass", "-accepteula -ma"
+]);
+
+// ============================================================================
+// DETECTION 1: Direct LSASS Access via Known Tools
+// ============================================================================
+let lsass_access_known_tools = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ (suspicious_processes)
+    or ProcessCommandLine has_any (suspicious_cmdline_patterns)
+| extend 
+    DetectionType = "Known Credential Dumping Tool",
+    Severity = "High",
+    MitreAttack = "T1003.001"
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    MitreAttack,
+    ProcessName = FileName,
+    ProcessCommandLine,
+    ProcessId,
+    ParentProcessName = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain,
+    SHA256;
+
+// ============================================================================
+// DETECTION 2: LSASS Memory Dump via comsvcs.dll (Living off the Land)
+// ============================================================================
+let comsvcs_dump = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where ProcessCommandLine has "comsvcs" 
+    and ProcessCommandLine has_any ("MiniDump", "minidump", "#24", "full")
+| extend 
+    DetectionType = "LSASS Dump via comsvcs.dll (LOTL)",
+    Severity = "Critical",
+    MitreAttack = "T1003.001"
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    MitreAttack,
+    ProcessName = FileName,
+    ProcessCommandLine,
+    ProcessId,
+    ParentProcessName = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain,
+    SHA256;
+
+// ============================================================================
+// DETECTION 3: Suspicious Process Accessing LSASS
+// ============================================================================
+let suspicious_lsass_access = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName =~ lsass_process
+| join kind=inner (
+    DeviceProcessEvents
+    | where Timestamp > ago(lookback)
+    | where InitiatingProcessFileName !in~ (
+        "csrss.exe", "wininit.exe", "services.exe", 
+        "MsMpEng.exe", "svchost.exe", "lsm.exe"
+    )
+    | where InitiatingProcessFolderPath !startswith "C:\\Program Files\\Windows Defender"
+    | where InitiatingProcessFolderPath !startswith "C:\\ProgramData\\Microsoft\\Windows Defender"
+) on DeviceName, $left.ProcessId == $right.ProcessId
+| extend 
+    DetectionType = "Suspicious Process Accessing LSASS",
+    Severity = "Medium",
+    MitreAttack = "T1003.001"
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    MitreAttack,
+    ProcessName = FileName,
+    ProcessCommandLine,
+    ProcessId,
+    ParentProcessName = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain,
+    SHA256;
+
+// ============================================================================
+// DETECTION 4: Task Manager LSASS Dump
+// ============================================================================
+let taskmgr_dump = DeviceFileEvents
+| where Timestamp > ago(lookback)
+| where InitiatingProcessFileName =~ "taskmgr.exe"
+| where FileName endswith ".dmp" or FileName contains "lsass"
+| extend 
+    DetectionType = "LSASS Dump via Task Manager",
+    Severity = "High",
+    MitreAttack = "T1003.001"
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    MitreAttack,
+    FileName,
+    FolderPath,
+    InitiatingProcessFileName,
+    InitiatingProcessCommandLine,
+    InitiatingProcessAccountName;
+
+// ============================================================================
+// DETECTION 5: PowerShell-based Credential Dumping
+// ============================================================================
+let powershell_cred_dump = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("powershell.exe", "pwsh.exe", "powershell_ise.exe")
+| where ProcessCommandLine has_any (
+    "Out-Minidump", "Get-Process lsass",
+    "MiniDumpWriteDump", "sekurlsa",
+    "Invoke-Mimikatz", "DumpCreds",
+    "Get-LSASecret", "Get-CachedGPPPassword"
+)
+| extend 
+    DetectionType = "PowerShell Credential Dumping",
+    Severity = "Critical",
+    MitreAttack = "T1003.001"
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    MitreAttack,
+    ProcessName = FileName,
+    ProcessCommandLine,
+    ProcessId,
+    ParentProcessName = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain,
+    SHA256;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union lsass_access_known_tools, comsvcs_dump, taskmgr_dump, powershell_cred_dump
+| summarize 
+    DetectionCount = count(),
+    Techniques = make_set(DetectionType),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp),
+    CommandLines = make_set(ProcessCommandLine, 5)
+    by DeviceName, AccountName, AccountDomain, Severity, MitreAttack
+| extend 
+    AlertTitle = strcat("Credential Dumping Detected on ", DeviceName),
+    AlertDescription = strcat(
+        "Detected ", DetectionCount, " credential dumping attempt(s) using techniques: ",
+        strcat_array(Techniques, ", ")
+    )
+| project 
+    AlertTitle,
+    AlertDescription,
+    Severity,
+    MitreAttack,
+    DeviceName,
+    AccountName,
+    AccountDomain,
+    DetectionCount,
+    Techniques,
+    FirstSeen,
+    LastSeen,
+    CommandLines
+| order by Severity desc, DetectionCount desc

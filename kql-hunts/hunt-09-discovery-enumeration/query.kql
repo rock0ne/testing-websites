@@ -1,0 +1,152 @@
+// ============================================================================
+// Hunt 09: Discovery & Enumeration Detection
+// MITRE ATT&CK: T1087, T1082, T1083, T1016, T1018
+// ============================================================================
+
+let lookback = 24h;
+let enum_threshold = 5; // Number of discovery commands in short time
+
+// Discovery commands commonly used by attackers
+let discovery_commands = dynamic([
+    "whoami", "hostname", "ipconfig", "systeminfo", "net user",
+    "net group", "net localgroup", "net share", "net view",
+    "nltest", "dsquery", "gpresult", "klist", "cmdkey",
+    "query user", "qwinsta", "tasklist", "wmic", "netstat"
+]);
+
+// ============================================================================
+// DETECTION 1: Rapid Discovery Command Execution
+// ============================================================================
+let rapid_discovery = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("cmd.exe", "powershell.exe")
+| where ProcessCommandLine has_any (discovery_commands)
+| summarize 
+    CommandCount = count(),
+    Commands = make_set(ProcessCommandLine, 10),
+    DiscoveryTypes = make_set(
+        case(
+            ProcessCommandLine has "whoami", "Identity",
+            ProcessCommandLine has_any ("net user", "net group", "dsquery"), "Account",
+            ProcessCommandLine has_any ("ipconfig", "netstat", "net view"), "Network",
+            ProcessCommandLine has "systeminfo", "System",
+            "Other"
+        )
+    ),
+    FirstCommand = min(Timestamp),
+    LastCommand = max(Timestamp)
+    by DeviceName, AccountName, bin(Timestamp, 10m)
+| where CommandCount >= enum_threshold
+| extend 
+    TimeSpan = LastCommand - FirstCommand,
+    DetectionType = "Rapid Discovery Enumeration",
+    Severity = case(
+        CommandCount >= 10, "High",
+        CommandCount >= 7, "Medium",
+        "Low"
+    ),
+    MitreAttack = "T1087",
+    RiskScore = CommandCount * 10
+| project 
+    Timestamp = LastCommand, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    CommandCount, DiscoveryTypes, TimeSpan, AccountName, Commands;
+
+// ============================================================================
+// DETECTION 2: Active Directory Enumeration
+// ============================================================================
+let ad_enumeration = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where ProcessCommandLine has_any (
+    "Get-ADUser", "Get-ADGroup", "Get-ADComputer", "Get-ADDomain",
+    "Get-DomainUser", "Get-DomainGroup", "Get-DomainComputer",
+    "dsquery user", "dsquery computer", "dsquery group",
+    "net group \"Domain Admins\"", "net group \"Enterprise Admins\"",
+    "nltest /dclist", "nltest /domain_trusts",
+    "ldapsearch", "adfind"
+)
+| extend 
+    DetectionType = "Active Directory Enumeration",
+    Severity = "High",
+    MitreAttack = "T1087.002",
+    RiskScore = 80
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// DETECTION 3: Network Share Enumeration
+// ============================================================================
+let share_enumeration = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where ProcessCommandLine has_any (
+    "net view", "net share", "Get-SmbShare", "Get-FileShare",
+    "Invoke-ShareFinder", "Find-DomainShare"
+)
+| extend 
+    DetectionType = "Network Share Enumeration",
+    Severity = "Medium",
+    MitreAttack = "T1135",
+    RiskScore = 60
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// DETECTION 4: Security Software Discovery
+// ============================================================================
+let security_discovery = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where ProcessCommandLine has_any (
+    "Get-MpComputerStatus", "Get-MpPreference",
+    "wmic /namespace:\\\\root\\SecurityCenter2",
+    "fltMC.exe", "sc query windefend",
+    "tasklist /svc | findstr /i \"defender\"",
+    "reg query.*Windows Defender"
+)
+| extend 
+    DetectionType = "Security Software Discovery",
+    Severity = "High",
+    MitreAttack = "T1518.001",
+    RiskScore = 75
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// DETECTION 5: BloodHound/SharpHound Collection
+// ============================================================================
+let bloodhound = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where ProcessCommandLine has_any (
+    "SharpHound", "BloodHound", "Invoke-BloodHound",
+    "-CollectionMethod", "DCOnly", "All,GPOLocalGroup"
+)
+    or FileName in~ ("SharpHound.exe", "SharpHound.ps1")
+| extend 
+    DetectionType = "BloodHound/SharpHound Collection",
+    Severity = "Critical",
+    MitreAttack = "T1087.002",
+    RiskScore = 95
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union rapid_discovery, ad_enumeration, share_enumeration, security_discovery, bloodhound
+| summarize 
+    TotalEvents = count(),
+    DiscoveryTypes = make_set(DetectionType),
+    MaxRiskScore = max(RiskScore),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, AccountName, MitreAttack
+| extend 
+    AlertTitle = strcat("Discovery/Enumeration Activity on ", DeviceName),
+    OverallSeverity = case(
+        MaxRiskScore >= 90, "Critical",
+        MaxRiskScore >= 70, "High",
+        "Medium"
+    )
+| order by MaxRiskScore desc

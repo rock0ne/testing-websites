@@ -1,0 +1,115 @@
+// ============================================================================
+// Hunt 05: Defense Evasion - Process Injection Detection
+// MITRE ATT&CK: T1055 - Process Injection
+// ============================================================================
+
+let lookback = 24h;
+
+// ============================================================================
+// DETECTION 1: CreateRemoteThread Injection
+// ============================================================================
+let remote_thread = DeviceEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "CreateRemoteThreadApiCall"
+| where InitiatingProcessFileName !in~ ("csrss.exe", "lsass.exe", "services.exe")
+| extend 
+    DetectionType = "CreateRemoteThread Injection",
+    Severity = "High",
+    MitreAttack = "T1055.003",
+    RiskScore = 85
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    InitiatingProcessFileName, InitiatingProcessCommandLine,
+    FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// DETECTION 2: Process Hollowing Indicators
+// ============================================================================
+let process_hollowing = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("svchost.exe", "dllhost.exe", "rundll32.exe", "regsvr32.exe")
+| where InitiatingProcessFileName !in~ ("services.exe", "svchost.exe", "wmiprvse.exe")
+| where ProcessCommandLine == "" or ProcessCommandLine !has FileName
+| extend 
+    DetectionType = "Potential Process Hollowing",
+    Severity = "High",
+    MitreAttack = "T1055.012",
+    RiskScore = 80
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, ProcessId,
+    ParentProcess = InitiatingProcessFileName, AccountName;
+
+// ============================================================================
+// DETECTION 3: DLL Injection via LoadLibrary
+// ============================================================================
+let dll_injection = DeviceImageLoadEvents
+| where Timestamp > ago(lookback)
+| where FolderPath has_any ("\\Temp\\", "\\tmp\\", "\\AppData\\Local\\Temp", "\\Downloads\\")
+| where FileName endswith ".dll"
+| where InitiatingProcessFileName !in~ ("msiexec.exe", "setup.exe", "installer.exe")
+| extend 
+    DetectionType = "Suspicious DLL Load",
+    Severity = "Medium",
+    MitreAttack = "T1055.001",
+    RiskScore = 70
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    LoadedDLL = FileName, DLLPath = FolderPath,
+    LoadingProcess = InitiatingProcessFileName, AccountName = InitiatingProcessAccountName;
+
+// ============================================================================
+// DETECTION 4: Masquerading - Suspicious Process Paths
+// ============================================================================
+let masquerading = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("svchost.exe", "csrss.exe", "lsass.exe", "services.exe", "smss.exe")
+| where FolderPath !startswith "C:\\Windows\\System32"
+    and FolderPath !startswith "C:\\Windows\\SysWOW64"
+| extend 
+    DetectionType = "Process Masquerading",
+    Severity = "Critical",
+    MitreAttack = "T1036.005",
+    RiskScore = 95
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, SuspiciousPath = FolderPath,
+    ProcessCommandLine, AccountName;
+
+// ============================================================================
+// DETECTION 5: NTDLL Unhooking Attempts
+// ============================================================================
+let ntdll_unhook = DeviceFileEvents
+| where Timestamp > ago(lookback)
+| where FileName =~ "ntdll.dll"
+| where ActionType == "FileRead"
+| where InitiatingProcessFileName !in~ ("csrss.exe", "smss.exe", "lsass.exe")
+| extend 
+    DetectionType = "Potential NTDLL Unhooking",
+    Severity = "High",
+    MitreAttack = "T1562.001",
+    RiskScore = 85
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    InitiatingProcessFileName, InitiatingProcessCommandLine,
+    AccountName = InitiatingProcessAccountName;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union remote_thread, process_hollowing, masquerading
+| summarize 
+    TotalEvents = count(),
+    Techniques = make_set(DetectionType),
+    MaxRiskScore = max(RiskScore),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, AccountName, MitreAttack
+| extend 
+    AlertTitle = strcat("Defense Evasion Detected on ", DeviceName),
+    OverallSeverity = case(
+        MaxRiskScore >= 90, "Critical",
+        MaxRiskScore >= 75, "High",
+        "Medium"
+    )
+| order by MaxRiskScore desc

@@ -1,0 +1,156 @@
+// ============================================================================
+// Hunt 06: Data Exfiltration Detection
+// MITRE ATT&CK: T1048 - Exfiltration Over Alternative Protocol
+// ============================================================================
+
+let lookback = 24h;
+let large_upload_threshold = 50000000; // 50MB
+let dns_query_threshold = 100; // queries per hour
+
+// ============================================================================
+// DETECTION 1: Large Outbound Data Transfers
+// ============================================================================
+let large_transfers = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "ConnectionSuccess"
+| where RemotePort in (80, 443, 8080, 8443)
+| where RemoteIPType == "Public"
+| summarize 
+    TotalBytesSent = sum(SentBytes),
+    ConnectionCount = count(),
+    DestinationIPs = make_set(RemoteIP, 10)
+    by DeviceName, InitiatingProcessFileName, bin(Timestamp, 1h)
+| where TotalBytesSent > large_upload_threshold
+| extend 
+    DetectionType = "Large Outbound Data Transfer",
+    Severity = "High",
+    MitreAttack = "T1048",
+    RiskScore = 80,
+    DataSizeMB = TotalBytesSent / 1000000
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = InitiatingProcessFileName, DataSizeMB, ConnectionCount, DestinationIPs;
+
+// ============================================================================
+// DETECTION 2: DNS Tunneling Indicators
+// ============================================================================
+let dns_tunneling = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where RemotePort == 53
+| extend 
+    QueryLength = strlen(RemoteUrl),
+    SubdomainCount = array_length(split(RemoteUrl, "."))
+| where QueryLength > 50 or SubdomainCount > 5
+| summarize 
+    SuspiciousQueries = count(),
+    AvgQueryLength = avg(QueryLength),
+    UniqueQueries = dcount(RemoteUrl)
+    by DeviceName, InitiatingProcessFileName, bin(Timestamp, 1h)
+| where SuspiciousQueries > dns_query_threshold
+| extend 
+    DetectionType = "Potential DNS Tunneling",
+    Severity = "High",
+    MitreAttack = "T1048.003",
+    RiskScore = 85
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = InitiatingProcessFileName, SuspiciousQueries, AvgQueryLength;
+
+// ============================================================================
+// DETECTION 3: Cloud Storage Exfiltration
+// ============================================================================
+let cloud_exfil = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where RemoteUrl has_any (
+    "dropbox.com", "drive.google.com", "onedrive.live.com",
+    "mega.nz", "mediafire.com", "wetransfer.com",
+    "pastebin.com", "transfer.sh", "file.io"
+)
+| where SentBytes > 1000000 // 1MB+
+| summarize 
+    TotalBytesSent = sum(SentBytes),
+    UploadCount = count(),
+    Destinations = make_set(RemoteUrl)
+    by DeviceName, InitiatingProcessFileName, AccountName
+| where TotalBytesSent > 10000000 // 10MB total
+| extend 
+    DetectionType = "Cloud Storage Exfiltration",
+    Severity = "Critical",
+    MitreAttack = "T1567.002",
+    RiskScore = 90,
+    DataSizeMB = TotalBytesSent / 1000000
+| project 
+    Timestamp = now(), DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = InitiatingProcessFileName, DataSizeMB, UploadCount, Destinations, AccountName;
+
+// ============================================================================
+// DETECTION 4: Unusual Protocol Usage
+// ============================================================================
+let unusual_protocol = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where RemotePort in (21, 22, 23, 25, 69, 3389) // FTP, SSH, Telnet, SMTP, TFTP, RDP
+| where RemoteIPType == "Public"
+| where SentBytes > 1000000
+| extend 
+    Protocol = case(
+        RemotePort == 21, "FTP",
+        RemotePort == 22, "SSH",
+        RemotePort == 23, "Telnet",
+        RemotePort == 25, "SMTP",
+        RemotePort == 69, "TFTP",
+        RemotePort == 3389, "RDP",
+        "Other"
+    ),
+    DetectionType = "Unusual Protocol Data Transfer",
+    Severity = "High",
+    MitreAttack = "T1048",
+    RiskScore = 75
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    Protocol, RemoteIP, SentBytes, InitiatingProcessFileName;
+
+// ============================================================================
+// DETECTION 5: Archive Creation Before Transfer
+// ============================================================================
+let archive_exfil = DeviceFileEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "FileCreated"
+| where FileName endswith_any (".zip", ".rar", ".7z", ".tar", ".gz")
+| where FolderPath has_any ("\\Temp\\", "\\Downloads\\", "\\Desktop\\")
+| join kind=inner (
+    DeviceNetworkEvents
+    | where Timestamp > ago(lookback)
+    | where SentBytes > 5000000
+    | where RemoteIPType == "Public"
+) on DeviceName
+| where DeviceNetworkEvents_Timestamp between (Timestamp .. (Timestamp + 1h))
+| extend 
+    DetectionType = "Archive Created Then Uploaded",
+    Severity = "Critical",
+    MitreAttack = "T1560.001",
+    RiskScore = 95
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ArchiveFile = FileName, ArchivePath = FolderPath,
+    UploadDestination = RemoteIP, BytesSent = SentBytes;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union large_transfers, dns_tunneling, cloud_exfil, unusual_protocol
+| summarize 
+    TotalEvents = count(),
+    ExfilTypes = make_set(DetectionType),
+    MaxRiskScore = max(RiskScore),
+    TotalDataMB = sum(toreal(DataSizeMB)),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, MitreAttack
+| extend 
+    AlertTitle = strcat("Data Exfiltration Detected from ", DeviceName),
+    OverallSeverity = case(
+        MaxRiskScore >= 90, "Critical",
+        MaxRiskScore >= 75, "High",
+        "Medium"
+    )
+| order by MaxRiskScore desc

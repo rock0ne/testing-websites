@@ -1,0 +1,141 @@
+// ============================================================================
+// Hunt 04: Registry Persistence Detection
+// MITRE ATT&CK: T1547.001 - Registry Run Keys / Startup Folder
+// ============================================================================
+
+let lookback = 24h;
+
+// Persistence registry paths
+let persistence_keys = dynamic([
+    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+    @"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
+    @"SOFTWARE\Microsoft\Windows\CurrentVersion\RunServices",
+    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run",
+    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+    @"SYSTEM\CurrentControlSet\Services",
+    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+]);
+
+// Suspicious file locations
+let suspicious_paths = dynamic([
+    "\\Temp\\", "\\tmp\\", "\\AppData\\Local\\Temp",
+    "\\Downloads\\", "\\Public\\",
+    "\\ProgramData\\", "C:\\Users\\Public"
+]);
+
+// ============================================================================
+// DETECTION 1: Run Key Modifications
+// ============================================================================
+let run_key_mods = DeviceRegistryEvents
+| where Timestamp > ago(lookback)
+| where ActionType in ("RegistryValueSet", "RegistryKeyCreated")
+| where RegistryKey has_any (persistence_keys)
+| where RegistryKey has_any ("Run", "RunOnce")
+| extend 
+    ValuePath = strcat(RegistryKey, "\\", RegistryValueName),
+    IsSuspiciousPath = RegistryValueData has_any (suspicious_paths),
+    DetectionType = "Registry Run Key Persistence",
+    MitreAttack = "T1547.001"
+| extend 
+    Severity = case(
+        IsSuspiciousPath, "High",
+        RegistryValueData has_any (".ps1", ".vbs", ".bat", ".cmd"), "High",
+        "Medium"
+    ),
+    RiskScore = case(
+        IsSuspiciousPath, 85,
+        RegistryValueData has_any (".ps1", ".vbs", ".bat"), 80,
+        60
+    )
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    RegistryKey, RegistryValueName, RegistryValueData,
+    InitiatingProcessFileName, InitiatingProcessCommandLine,
+    AccountName = InitiatingProcessAccountName;
+
+// ============================================================================
+// DETECTION 2: Service Creation for Persistence
+// ============================================================================
+let service_persistence = DeviceRegistryEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "RegistryValueSet"
+| where RegistryKey has @"SYSTEM\CurrentControlSet\Services"
+| where RegistryValueName in~ ("ImagePath", "ServiceDll")
+| where RegistryValueData has_any (suspicious_paths)
+    or RegistryValueData has_any (".ps1", "powershell", "cmd /c", "mshta")
+| extend 
+    ServiceName = extract(@"Services\\([^\\]+)", 1, RegistryKey),
+    DetectionType = "Suspicious Service Persistence",
+    Severity = "Critical",
+    MitreAttack = "T1543.003",
+    RiskScore = 90
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ServiceName, RegistryKey, RegistryValueName, RegistryValueData,
+    InitiatingProcessFileName, AccountName = InitiatingProcessAccountName;
+
+// ============================================================================
+// DETECTION 3: Winlogon Persistence
+// ============================================================================
+let winlogon_persistence = DeviceRegistryEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "RegistryValueSet"
+| where RegistryKey has @"Winlogon"
+| where RegistryValueName in~ ("Shell", "Userinit", "Notify")
+| where RegistryValueData !has "explorer.exe" or RegistryValueData has ","
+| extend 
+    DetectionType = "Winlogon Persistence",
+    Severity = "Critical",
+    MitreAttack = "T1547.004",
+    RiskScore = 95
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    RegistryKey, RegistryValueName, RegistryValueData,
+    InitiatingProcessFileName, AccountName = InitiatingProcessAccountName;
+
+// ============================================================================
+// DETECTION 4: Scheduled Task via Registry
+// ============================================================================
+let scheduled_task_reg = DeviceRegistryEvents
+| where Timestamp > ago(lookback)
+| where ActionType in ("RegistryValueSet", "RegistryKeyCreated")
+| where RegistryKey has @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache"
+| extend 
+    DetectionType = "Scheduled Task Registry Modification",
+    Severity = "Medium",
+    MitreAttack = "T1053.005",
+    RiskScore = 65
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    RegistryKey, RegistryValueName, RegistryValueData,
+    InitiatingProcessFileName, AccountName = InitiatingProcessAccountName;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union run_key_mods, service_persistence, winlogon_persistence, scheduled_task_reg
+| summarize 
+    TotalModifications = count(),
+    PersistenceTypes = make_set(DetectionType),
+    MaxRiskScore = max(RiskScore),
+    RegistryPaths = make_set(RegistryKey, 5),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, AccountName, MitreAttack
+| extend 
+    AlertTitle = strcat("Registry Persistence Detected on ", DeviceName),
+    AlertDescription = strcat(
+        "Detected ", TotalModifications, " persistence mechanism(s): ",
+        strcat_array(PersistenceTypes, ", ")
+    ),
+    OverallSeverity = case(
+        MaxRiskScore >= 90, "Critical",
+        MaxRiskScore >= 75, "High",
+        "Medium"
+    )
+| project 
+    AlertTitle, AlertDescription, OverallSeverity, MaxRiskScore,
+    MitreAttack, DeviceName, AccountName, TotalModifications,
+    PersistenceTypes, RegistryPaths, FirstSeen, LastSeen
+| order by MaxRiskScore desc
