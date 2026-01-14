@@ -1,0 +1,10 @@
+{
+  "policyName": "BlueBastion-ASR-Baseline",
+  "description": "Hardened ASR for lab endpoints",
+  "asrRules": {
+    "BlockOfficeChildProcess": "enabled",
+    "BlockExecutableContentFromEmail": "enabled",
+    "BlockProcessCreationsFromPSExecAndWMI": "enabled",
+    "UseAdvancedProtectionAgainstRansomware": "enabled"
+  }
+}

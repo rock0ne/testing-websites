@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2021-09-01/Microsoft.OperationalInsights.Workspaces/providers/Microsoft.SecurityInsights/alertRules.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {},
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01-preview",
+      "name": "[concat(parameters('workspaceName'), '/Microsoft.SecurityInsights/', 'EncodedCommand-Execution')]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "PowerShell EncodedCommand Alert",
+        "enabled": true,
+        "query": "DeviceProcessEvents | where ProcessCommandLine has '-EncodedCommand' or ProcessCommandLine has ' -enc '",
+        "queryFrequency": "PT1H",
+        "queryPeriod": "PT1H",
+        "severity": "Medium",
+        "suppressionDuration": "PT5H",
+        "suppressionEnabled": false,
+        "tactics": [
+          "Execution"
+        ],
+        "techniques": [
+          "T1059.001"
+        ],
+        "eventGroupingSettings": {
+          "aggregationKind": "SingleAlert"
+        }
+      }
+    }
+  ]
+}

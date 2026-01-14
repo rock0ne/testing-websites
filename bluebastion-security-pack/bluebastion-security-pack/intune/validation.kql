@@ -1,0 +1,5 @@
+// ASR validation examples
+DeviceEvents
+| where Timestamp > ago(1d)
+| where ActionType in ("AsrOfficeChildProcessBlocked", "AsrExecutableEmailContentBlocked")
+| summarize count() by ActionType

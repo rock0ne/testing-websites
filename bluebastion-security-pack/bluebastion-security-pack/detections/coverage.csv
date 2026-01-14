@@ -1,0 +1,3 @@
+tactic,technique,rule_name,data_sources,status
+Execution,T1059.001,PowerShell EncodedCommand Alert,DeviceProcessEvents,draft
+Persistence,T1136.001,Local Admin Creation Alert,DeviceEvents,draft

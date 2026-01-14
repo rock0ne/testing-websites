@@ -1,0 +1,5 @@
+// Admin group membership changes (4732/4728)
+SecurityEvent
+| where EventID in (4732, 4728)
+| project TimeGenerated, Computer, EventID, Account = SubjectUserName, TargetUser = TargetUserName, Group = TargetSid
+| order by TimeGenerated desc
