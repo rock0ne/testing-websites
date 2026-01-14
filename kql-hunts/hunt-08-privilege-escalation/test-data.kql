@@ -1,0 +1,19 @@
+// ============================================================================
+// Synthetic Test Data - See query.kql for detection logic
+// ============================================================================
+// Use datatable() to create test events matching the detection patterns
+// Run validation queries to confirm expected detections
+
+// Example test data structure:
+let TestData = datatable(
+    Timestamp: datetime,
+    DeviceName: string,
+    ProcessName: string,
+    CommandLine: string,
+    AccountName: string
+) [
+    datetime(2024-01-14 10:00:00), "WORKSTATION01", "test.exe", "test command", "user1"
+];
+
+// Customize test cases based on the specific hunt patterns
+// Refer to README.md for expected detection scenarios

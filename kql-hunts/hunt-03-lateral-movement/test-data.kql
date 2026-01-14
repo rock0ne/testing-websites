@@ -1,0 +1,59 @@
+// ============================================================================
+// Hunt 03: Lateral Movement - Synthetic Test Data
+// ============================================================================
+
+let TestDeviceProcessEvents = datatable(
+    Timestamp: datetime,
+    DeviceName: string,
+    FileName: string,
+    ProcessCommandLine: string,
+    ProcessId: int,
+    InitiatingProcessFileName: string,
+    AccountName: string,
+    AccountDomain: string
+) [
+    // Test Case 1: PsExec execution (SHOULD DETECT)
+    datetime(2024-01-14 10:00:00), "WORKSTATION01", "PSEXESVC.exe",
+    "PSEXESVC.exe", 1234, "services.exe", "SYSTEM", "NT AUTHORITY",
+    
+    // Test Case 2: WMI spawning cmd (SHOULD DETECT)
+    datetime(2024-01-14 10:30:00), "SERVER01", "cmd.exe",
+    "cmd.exe /c whoami", 2345, "wmiprvse.exe", "admin", "CONTOSO",
+    
+    // Test Case 3: WinRM PowerShell (SHOULD DETECT)
+    datetime(2024-01-14 11:00:00), "SERVER02", "powershell.exe",
+    "powershell.exe -c Get-Process", 3456, "wsmprovhost.exe", "admin", "CONTOSO",
+    
+    // Test Case 4: Remote service creation (SHOULD DETECT - Critical)
+    datetime(2024-01-14 11:30:00), "WORKSTATION02", "sc.exe",
+    "sc.exe \\\\SERVER03 create malware binpath= C:\\temp\\malware.exe", 4567,
+    "cmd.exe", "attacker", "CONTOSO",
+    
+    // Test Case 5: Legitimate SCCM (SHOULD NOT DETECT)
+    datetime(2024-01-14 12:00:00), "SCCM01", "cmd.exe",
+    "cmd.exe /c gpupdate", 5678, "wmiprvse.exe", "SYSTEM", "NT AUTHORITY"
+];
+
+let TestDeviceNetworkEvents = datatable(
+    Timestamp: datetime,
+    DeviceName: string,
+    RemotePort: int,
+    RemoteIP: string,
+    RemoteUrl: string,
+    ActionType: string,
+    InitiatingProcessFileName: string,
+    AccountName: string
+) [
+    // Test Case 6: SMB Admin Share access (SHOULD DETECT)
+    datetime(2024-01-14 12:30:00), "WORKSTATION03", 445, "10.0.0.50", "\\\\10.0.0.50\\ADMIN$", "ConnectionSuccess", "cmd.exe", "attacker",
+    datetime(2024-01-14 12:31:00), "WORKSTATION03", 445, "10.0.0.51", "\\\\10.0.0.51\\C$", "ConnectionSuccess", "cmd.exe", "attacker",
+    datetime(2024-01-14 12:32:00), "WORKSTATION03", 445, "10.0.0.52", "\\\\10.0.0.52\\ADMIN$", "ConnectionSuccess", "cmd.exe", "attacker"
+];
+
+// Expected Results:
+// Test 1: DETECT - PsExec
+// Test 2: DETECT - WMI lateral movement
+// Test 3: DETECT - WinRM lateral movement
+// Test 4: DETECT - Remote service creation (Critical)
+// Test 5: NO DETECT - SCCM management server
+// Test 6: DETECT - SMB admin share lateral movement

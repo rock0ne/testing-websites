@@ -1,0 +1,56 @@
+// ============================================================================
+// Hunt 04: Registry Persistence - Synthetic Test Data
+// ============================================================================
+
+let TestDeviceRegistryEvents = datatable(
+    Timestamp: datetime,
+    DeviceName: string,
+    ActionType: string,
+    RegistryKey: string,
+    RegistryValueName: string,
+    RegistryValueData: string,
+    InitiatingProcessFileName: string,
+    InitiatingProcessCommandLine: string,
+    InitiatingProcessAccountName: string
+) [
+    // Test Case 1: Run key with suspicious path (SHOULD DETECT - High)
+    datetime(2024-01-14 10:00:00), "WORKSTATION01", "RegistryValueSet",
+    @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+    "Updater", @"C:\Users\Public\Downloads\malware.exe",
+    "reg.exe", "reg.exe add ...", "attacker",
+    
+    // Test Case 2: PowerShell in Run key (SHOULD DETECT - High)
+    datetime(2024-01-14 10:30:00), "WORKSTATION02", "RegistryValueSet",
+    @"HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+    "WindowsUpdate", @"powershell.exe -ep bypass -f C:\temp\payload.ps1",
+    "powershell.exe", "powershell.exe", "user1",
+    
+    // Test Case 3: Malicious service (SHOULD DETECT - Critical)
+    datetime(2024-01-14 11:00:00), "SERVER01", "RegistryValueSet",
+    @"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\MalService",
+    "ImagePath", @"C:\ProgramData\malware.exe",
+    "sc.exe", "sc.exe create MalService", "admin",
+    
+    // Test Case 4: Winlogon modification (SHOULD DETECT - Critical)
+    datetime(2024-01-14 11:30:00), "WORKSTATION03", "RegistryValueSet",
+    @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+    "Userinit", @"C:\Windows\system32\userinit.exe,C:\temp\backdoor.exe",
+    "reg.exe", "reg.exe add ...", "attacker",
+    
+    // Test Case 5: Legitimate software (SHOULD NOT DETECT)
+    datetime(2024-01-14 12:00:00), "WORKSTATION01", "RegistryValueSet",
+    @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+    "SecurityHealth", @"C:\Program Files\Windows Defender\MSASCuiL.exe",
+    "msiexec.exe", "msiexec.exe /i defender.msi", "SYSTEM"
+];
+
+// Validation query
+TestDeviceRegistryEvents
+| where RegistryKey has_any ("Run", "Services", "Winlogon")
+| extend 
+    IsSuspicious = RegistryValueData has_any ("\\Temp\\", "\\Public\\", "\\ProgramData\\", ".ps1")
+        or (RegistryKey has "Winlogon" and RegistryValueData has ",")
+| project 
+    Timestamp, DeviceName, RegistryKey, RegistryValueName, 
+    RegistryValueData, IsSuspicious,
+    ExpectedDetection = IsSuspicious

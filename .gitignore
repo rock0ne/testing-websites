@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+
+# Browser screenshots (testing artifacts)
+.browser_screenshots/

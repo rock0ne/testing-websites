@@ -1,0 +1,141 @@
+// ============================================================================
+// Hunt 03: Lateral Movement Detection
+// MITRE ATT&CK: T1021.002, T1047, T1021.006
+// ============================================================================
+
+let lookback = 24h;
+
+// Known management servers to exclude
+let management_servers = dynamic(["SCCM01", "INTUNE01", "WSUS01"]);
+
+// ============================================================================
+// DETECTION 1: PsExec Activity
+// ============================================================================
+let psexec_activity = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName =~ "PSEXESVC.exe" 
+    or ProcessCommandLine has_any ("psexec", "\\\\", "-s cmd", "-accepteula")
+    or (FileName =~ "cmd.exe" and InitiatingProcessFileName =~ "services.exe" 
+        and ProcessCommandLine has "\\\\")
+| extend 
+    DetectionType = "PsExec Lateral Movement",
+    Severity = "High",
+    MitreAttack = "T1021.002",
+    RiskScore = 80
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    AccountName, AccountDomain;
+
+// ============================================================================
+// DETECTION 2: WMI Remote Execution
+// ============================================================================
+let wmi_lateral = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where InitiatingProcessFileName =~ "wmiprvse.exe"
+| where FileName in~ ("cmd.exe", "powershell.exe", "mshta.exe", "cscript.exe", "wscript.exe")
+| where DeviceName !in (management_servers)
+| extend 
+    DetectionType = "WMI Remote Execution",
+    Severity = "High",
+    MitreAttack = "T1047",
+    RiskScore = 75
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    AccountName, AccountDomain;
+
+// ============================================================================
+// DETECTION 3: WinRM Remote Execution
+// ============================================================================
+let winrm_lateral = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where InitiatingProcessFileName =~ "wsmprovhost.exe"
+| where FileName in~ ("cmd.exe", "powershell.exe")
+| where DeviceName !in (management_servers)
+| extend 
+    DetectionType = "WinRM Remote Execution",
+    Severity = "Medium",
+    MitreAttack = "T1021.006",
+    RiskScore = 65
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, ProcessId,
+    ParentProcess = InitiatingProcessFileName,
+    AccountName, AccountDomain;
+
+// ============================================================================
+// DETECTION 4: SMB Admin Share Access
+// ============================================================================
+let smb_lateral = DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| where RemotePort == 445
+| where ActionType == "ConnectionSuccess"
+| where RemoteUrl has_any ("ADMIN$", "C$", "IPC$")
+| summarize 
+    ConnectionCount = count(),
+    TargetHosts = make_set(RemoteIP),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, InitiatingProcessFileName, AccountName
+| where ConnectionCount >= 3  // Multiple targets indicates lateral movement
+| extend 
+    DetectionType = "SMB Admin Share Lateral Movement",
+    Severity = "High",
+    MitreAttack = "T1021.002",
+    RiskScore = 85
+| project 
+    Timestamp = LastSeen, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = InitiatingProcessFileName, ConnectionCount,
+    TargetHosts, AccountName;
+
+// ============================================================================
+// DETECTION 5: Remote Service Creation
+// ============================================================================
+let remote_service = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName =~ "sc.exe"
+| where ProcessCommandLine has "\\\\" and ProcessCommandLine has "create"
+| extend 
+    TargetHost = extract(@"\\\\([^\s\\]+)", 1, ProcessCommandLine),
+    ServiceName = extract(@"create\s+(\S+)", 1, ProcessCommandLine)
+| where isnotempty(TargetHost)
+| extend 
+    DetectionType = "Remote Service Creation",
+    Severity = "Critical",
+    MitreAttack = "T1021.002",
+    RiskScore = 90
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine,
+    TargetHost, ServiceName, AccountName, AccountDomain;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union psexec_activity, wmi_lateral, winrm_lateral, remote_service
+| summarize 
+    TotalEvents = count(),
+    Techniques = make_set(DetectionType),
+    MaxRiskScore = max(RiskScore),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, AccountName, MitreAttack
+| extend 
+    AlertTitle = strcat("Lateral Movement Detected from ", DeviceName),
+    AlertDescription = strcat(
+        "Detected ", TotalEvents, " lateral movement event(s) using: ",
+        strcat_array(Techniques, ", ")
+    ),
+    OverallSeverity = case(
+        MaxRiskScore >= 85, "Critical",
+        MaxRiskScore >= 70, "High",
+        "Medium"
+    )
+| project 
+    AlertTitle, AlertDescription, OverallSeverity, MaxRiskScore,
+    MitreAttack, DeviceName, AccountName, TotalEvents, Techniques,
+    FirstSeen, LastSeen
+| order by MaxRiskScore desc

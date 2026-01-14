@@ -1,0 +1,138 @@
+// ============================================================================
+// Hunt 08: Privilege Escalation Detection
+// MITRE ATT&CK: T1068, T1548, T1134
+// ============================================================================
+
+let lookback = 24h;
+
+// ============================================================================
+// DETECTION 1: UAC Bypass Attempts
+// ============================================================================
+let uac_bypass = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where (
+    // Fodhelper bypass
+    (FileName =~ "fodhelper.exe" and InitiatingProcessFileName !~ "explorer.exe")
+    // Eventvwr bypass
+    or (FileName =~ "eventvwr.exe" and InitiatingProcessFileName !~ "explorer.exe")
+    // Computerdefaults bypass
+    or (FileName =~ "computerdefaults.exe" and InitiatingProcessFileName !~ "explorer.exe")
+    // CMSTP bypass
+    or (FileName =~ "cmstp.exe" and ProcessCommandLine has "/s")
+)
+| extend 
+    DetectionType = "UAC Bypass Attempt",
+    Severity = "High",
+    MitreAttack = "T1548.002",
+    RiskScore = 85
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine,
+    ParentProcess = InitiatingProcessFileName, AccountName;
+
+// ============================================================================
+// DETECTION 2: Token Manipulation
+// ============================================================================
+let token_manipulation = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where ProcessCommandLine has_any (
+    "SeDebugPrivilege", "SeImpersonatePrivilege", "SeAssignPrimaryTokenPrivilege",
+    "AdjustTokenPrivileges", "DuplicateToken", "ImpersonateLoggedOnUser"
+)
+| extend 
+    DetectionType = "Token Manipulation",
+    Severity = "Critical",
+    MitreAttack = "T1134",
+    RiskScore = 90
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// DETECTION 3: Scheduled Task Privilege Escalation
+// ============================================================================
+let schtask_privesc = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName =~ "schtasks.exe"
+| where ProcessCommandLine has "/create" 
+    and ProcessCommandLine has_any ("/ru SYSTEM", "/ru \"NT AUTHORITY\\SYSTEM\"", "/rl HIGHEST")
+| extend 
+    DetectionType = "Scheduled Task Privilege Escalation",
+    Severity = "High",
+    MitreAttack = "T1053.005",
+    RiskScore = 80
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine,
+    ParentProcess = InitiatingProcessFileName, AccountName;
+
+// ============================================================================
+// DETECTION 4: Service Privilege Escalation
+// ============================================================================
+let service_privesc = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName =~ "sc.exe"
+| where ProcessCommandLine has "config" 
+    and ProcessCommandLine has_any ("binpath", "obj= LocalSystem")
+| extend 
+    DetectionType = "Service Configuration Privilege Escalation",
+    Severity = "Critical",
+    MitreAttack = "T1543.003",
+    RiskScore = 90
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// DETECTION 5: Named Pipe Impersonation
+// ============================================================================
+let pipe_impersonation = DeviceEvents
+| where Timestamp > ago(lookback)
+| where ActionType == "NamedPipeEvent"
+| where AdditionalFields has "Impersonation"
+| extend 
+    DetectionType = "Named Pipe Impersonation",
+    Severity = "High",
+    MitreAttack = "T1134.001",
+    RiskScore = 85
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    InitiatingProcessFileName, AccountName;
+
+// ============================================================================
+// DETECTION 6: Potato Attacks (Token Impersonation)
+// ============================================================================
+let potato_attacks = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where ProcessCommandLine has_any (
+    "JuicyPotato", "RottenPotato", "SweetPotato", "PrintSpoofer",
+    "GodPotato", "RoguePotato", "SharpEfsPotato"
+)
+| extend 
+    DetectionType = "Potato Attack (Token Impersonation)",
+    Severity = "Critical",
+    MitreAttack = "T1134.001",
+    RiskScore = 95
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    ProcessName = FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union uac_bypass, token_manipulation, schtask_privesc, service_privesc, potato_attacks
+| summarize 
+    TotalEvents = count(),
+    PrivEscTypes = make_set(DetectionType),
+    MaxRiskScore = max(RiskScore),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by DeviceName, AccountName, MitreAttack
+| extend 
+    AlertTitle = strcat("Privilege Escalation Detected on ", DeviceName),
+    OverallSeverity = case(
+        MaxRiskScore >= 90, "Critical",
+        MaxRiskScore >= 75, "High",
+        "Medium"
+    )
+| order by MaxRiskScore desc

@@ -1,0 +1,147 @@
+// ============================================================================
+// Hunt 07: Initial Access - Phishing Detection
+// MITRE ATT&CK: T1566.001 - Phishing: Spearphishing Attachment
+// ============================================================================
+
+let lookback = 24h;
+
+// ============================================================================
+// DETECTION 1: Suspicious Email Attachments
+// ============================================================================
+let suspicious_attachments = EmailAttachmentInfo
+| where Timestamp > ago(lookback)
+| where FileType in~ (
+    "exe", "dll", "scr", "bat", "cmd", "ps1", "vbs", "js",
+    "hta", "wsf", "jar", "iso", "img", "vhd", "vhdx"
+)
+| join kind=inner (
+    EmailEvents
+    | where Timestamp > ago(lookback)
+) on NetworkMessageId
+| extend 
+    DetectionType = "Suspicious Email Attachment",
+    Severity = case(
+        FileType in~ ("exe", "dll", "scr"), "Critical",
+        FileType in~ ("iso", "img", "vhd"), "High",
+        "Medium"
+    ),
+    MitreAttack = "T1566.001",
+    RiskScore = case(
+        FileType in~ ("exe", "dll", "scr"), 95,
+        FileType in~ ("iso", "img", "vhd"), 85,
+        70
+    )
+| project 
+    Timestamp, DetectionType, Severity, RiskScore, MitreAttack,
+    RecipientEmailAddress, SenderFromAddress, Subject,
+    FileName, FileType, SHA256;
+
+// ============================================================================
+// DETECTION 2: Macro-Enabled Documents
+// ============================================================================
+let macro_docs = EmailAttachmentInfo
+| where Timestamp > ago(lookback)
+| where FileName endswith_any (".docm", ".xlsm", ".pptm", ".dotm", ".xltm")
+| join kind=inner (
+    EmailEvents
+    | where Timestamp > ago(lookback)
+    | where SenderFromDomain !in~ ("contoso.com", "microsoft.com") // Adjust for your domain
+) on NetworkMessageId
+| extend 
+    DetectionType = "Macro-Enabled Document from External",
+    Severity = "High",
+    MitreAttack = "T1566.001",
+    RiskScore = 80
+| project 
+    Timestamp, DetectionType, Severity, RiskScore, MitreAttack,
+    RecipientEmailAddress, SenderFromAddress, SenderFromDomain,
+    Subject, FileName;
+
+// ============================================================================
+// DETECTION 3: Password-Protected Archives
+// ============================================================================
+let protected_archives = EmailAttachmentInfo
+| where Timestamp > ago(lookback)
+| where FileName endswith_any (".zip", ".rar", ".7z")
+| join kind=inner (
+    EmailEvents
+    | where Timestamp > ago(lookback)
+    | where Subject has_any ("password", "pwd", "pass:", "code:")
+        or EmailBody has_any ("password is", "password:", "use password")
+) on NetworkMessageId
+| extend 
+    DetectionType = "Password-Protected Archive with Password in Email",
+    Severity = "Critical",
+    MitreAttack = "T1566.001",
+    RiskScore = 90
+| project 
+    Timestamp, DetectionType, Severity, RiskScore, MitreAttack,
+    RecipientEmailAddress, SenderFromAddress, Subject, FileName;
+
+// ============================================================================
+// DETECTION 4: URL Phishing Indicators
+// ============================================================================
+let url_phishing = EmailUrlInfo
+| where Timestamp > ago(lookback)
+| where UrlDomain !endswith ".microsoft.com"
+    and UrlDomain !endswith ".office.com"
+| where Url has_any (
+    "login", "signin", "verify", "secure", "account", "update",
+    "confirm", "password", "credential"
+)
+| join kind=inner (
+    EmailEvents
+    | where Timestamp > ago(lookback)
+) on NetworkMessageId
+| extend 
+    DetectionType = "Potential Credential Phishing URL",
+    Severity = "High",
+    MitreAttack = "T1566.002",
+    RiskScore = 75
+| project 
+    Timestamp, DetectionType, Severity, RiskScore, MitreAttack,
+    RecipientEmailAddress, SenderFromAddress, Subject,
+    Url, UrlDomain;
+
+// ============================================================================
+// DETECTION 5: Office Document Spawning Process
+// ============================================================================
+let office_spawn = DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where InitiatingProcessFileName in~ (
+    "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe"
+)
+| where FileName in~ (
+    "cmd.exe", "powershell.exe", "wscript.exe", "cscript.exe",
+    "mshta.exe", "certutil.exe", "bitsadmin.exe"
+)
+| extend 
+    DetectionType = "Office Application Spawning Suspicious Process",
+    Severity = "Critical",
+    MitreAttack = "T1566.001",
+    RiskScore = 95
+| project 
+    Timestamp, DeviceName, DetectionType, Severity, RiskScore, MitreAttack,
+    OfficeApp = InitiatingProcessFileName,
+    SpawnedProcess = FileName, ProcessCommandLine, AccountName;
+
+// ============================================================================
+// COMBINE ALL DETECTIONS
+// ============================================================================
+union suspicious_attachments, macro_docs, protected_archives, url_phishing, office_spawn
+| summarize 
+    TotalEvents = count(),
+    PhishingTypes = make_set(DetectionType),
+    MaxRiskScore = max(RiskScore),
+    TargetedUsers = make_set(RecipientEmailAddress, 10),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by MitreAttack
+| extend 
+    AlertTitle = "Phishing Campaign Detected",
+    OverallSeverity = case(
+        MaxRiskScore >= 90, "Critical",
+        MaxRiskScore >= 75, "High",
+        "Medium"
+    )
+| order by MaxRiskScore desc
